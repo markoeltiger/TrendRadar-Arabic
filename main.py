@@ -209,6 +209,19 @@ def load_config():
         server_source = "环境变量" if os.environ.get("NTFY_SERVER_URL") else "配置文件"
         notification_sources.append(f"ntfy({server_source})")
 
+    # 翻译配置（可通过环境变量覆盖）
+    translation_cfg = notification.get("translation", {})
+    config["TRANSLATION"] = {
+        "ENABLED": os.environ.get("TRANSLATION_ENABLED", "").strip().lower()
+        in ("true", "1")
+        if os.environ.get("TRANSLATION_ENABLED", "").strip()
+        else translation_cfg.get("enabled", False),
+        "TARGET_LANG": os.environ.get("TRANSLATION_TARGET", "").strip()
+        or translation_cfg.get("target_lang", "ar"),
+        "PROVIDER_URL": os.environ.get("TRANSLATION_PROVIDER_URL", "").strip()
+        or translation_cfg.get("provider_url", "https://libretranslate.de/translate"),
+    }
+
     if notification_sources:
         print(f"通知渠道配置来源: {', '.join(notification_sources)}")
     else:
@@ -330,6 +343,42 @@ def html_escape(text: str) -> str:
         .replace('"', "&quot;")
         .replace("'", "&#x27;")
     )
+
+
+def translate_text(text: str, target_lang: str = "ar", provider_url: Optional[str] = None) -> str:
+    """Translate text using an external provider (LibreTranslate-compatible API).
+
+    Falls back to the original text on error. This function sends the full text as
+    plain text; callers should strip formatting (HTML/Markdown) if needed.
+    """
+    if not text:
+        return text
+
+    if not provider_url:
+        provider_url = "https://libretranslate.de/translate"
+
+    try:
+        payload = {
+            "q": text,
+            "source": "auto",
+            "target": target_lang,
+            "format": "text",
+        }
+        headers = {"Content-Type": "application/json"}
+        resp = requests.post(provider_url, json=payload, headers=headers, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        # LibreTranslate returns {'translatedText': '...'}
+        translated = data.get("translatedText") if isinstance(data, dict) else None
+        if translated:
+            return translated
+        # Some providers return {'result': '...'} or similar — try fallbacks
+        if isinstance(data, dict) and "result" in data:
+            return data.get("result")
+        return text
+    except Exception as e:
+        print(f"翻译失败（{provider_url}）: {e}")
+        return text
 
 
 # === 推送记录管理 ===
@@ -3750,12 +3799,26 @@ def send_to_telegram(
             batch_header = f"<b>[第 {i}/{len(batches)} 批次]</b>\n\n"
             batch_content = batch_header + batch_content
 
+        # 支持可选翻译：如果启用了翻译，将把文本（去除 HTML/Markdown）翻译成目标语言并以纯文本发送
+        text_to_send = batch_content
+        parse_mode = "HTML"
+        if CONFIG.get("TRANSLATION", {}).get("ENABLED"):
+            provider = CONFIG.get("TRANSLATION", {}).get("PROVIDER_URL")
+            target_lang = CONFIG.get("TRANSLATION", {}).get("TARGET_LANG", "ar")
+            # 先移除 HTML 标签，再去除 markdown，得到纯文本传给翻译服务
+            stripped = re.sub(r"<[^>]+>", "", batch_content)
+            stripped = strip_markdown(stripped)
+            translated = translate_text(stripped, target_lang=target_lang, provider_url=provider)
+            text_to_send = translated
+            parse_mode = None
+
         payload = {
             "chat_id": chat_id,
-            "text": batch_content,
-            "parse_mode": "HTML",
+            "text": text_to_send,
             "disable_web_page_preview": True,
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
 
         try:
             response = requests.post(

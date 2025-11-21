@@ -83,6 +83,14 @@ notification:
     ntfy_topic: "" # ntfy主题名称
     ntfy_token: "" # ntfy访问令牌（可选，用于私有主题）
 
+    # 可选：推送内容翻译设置（用于将推送内容翻译为其他语言，例如阿拉伯语）
+    # 注意：翻译通过外部翻译服务实现（默认使用 libretranslate 公共实例）。
+    # 如果启用，请确保你的环境或网络允许访问 provider_url 指定的服务。
+    translation:
+      enabled: true # 是否启用推送翻译（false/true）
+      target_lang: "ar" # 目标语言代码，阿拉伯语为 "ar"
+      provider_url: "https://libretranslate.de/translate" # 翻译服务地址
+
 # 用于让关注度更高的新闻在更前面显示，即用算法重新组合不同平台的热搜排序形成你侧重的热搜，合起来是 1 就行
 weight:
   rank_weight: 0.6 # 排名权重
